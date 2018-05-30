@@ -12,6 +12,8 @@ find_package(catkin REQUIRED COMPONENTS
  roscpp
  joy
  message_generation
+ tf
+ mavros
 )
 
 find_package(Boost REQUIRED)
@@ -31,7 +33,7 @@ generate_messages(
 )
 
 catkin_package(
-
+DEPENDS tf mavros 
 )
 
 include_directories(
@@ -62,6 +64,11 @@ add_dependencies(falcon_control ros_falcon_generate_messages_cpp)
 target_link_libraries(joystick nifalcon_cli_base nifalcon usb-1.0)
 target_link_libraries(falcon_cs_pid nifalcon_cli_base nifalcon usb-1.0)
 target_link_libraries(falcon_js_pid nifalcon_cli_base nifalcon usb-1.0)
+
+add_executable(force_control src/ForceControl.cpp)
+add_dependencies(force_control ros_falcon_generate_messages_cpp)
+target_link_libraries(force_control nifalcon_cli_base nifalcon usb-1.0 ${catkin_LIBRARIES})
+
 #rosbuild_add_boost_directories()
 #rosbuild_link_boost(${PROJECT_NAME} thread)
 #target_link_libraries(libnifalcon_cli_base ${PROJECT_NAME})
