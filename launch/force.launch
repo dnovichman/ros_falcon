@@ -1,0 +1,27 @@
+<launch>
+    <node pkg="ros_falcon"
+          type="force_control"
+          name="force_control"
+          required="true"
+	  clear_params="true"
+          output="screen">
+      <param name="velocity_xy_max" value="3" />
+      <param name="velocity_z_max" value="3" />
+      <param name="KpGainX" value="40" />
+      <param name="KpGainY" value="40" />
+      <param name="KpGainZ" value="40" />
+      <param name="KdGainX" value="40" />
+      <param name="KdGainY" value="40" />
+      <param name="KdGainZ" value="5" />
+      <param name="KiGainX" value="0.1" />
+      <param name="KiGainY" value="0.1" />
+      <param name="KiGainZ" value="0" />
+      <param name="SatErrorX" value="5" />
+      <param name="SatErrorY" value="5" />
+      <param name="SatErrorZ" value="10" />
+      <param name="VelFilterB" value="0.0001" />
+	  <remap from="~odom" to="/iris1/odom"/>
+	  <remap from="~setpoint_sub" to="/mavros/setpoint_raw/target_local"/> 
+	  <remap from="~setpoint_pub" to="/mavros/setpoint_raw/local"/>
+    </node>
+</launch>
