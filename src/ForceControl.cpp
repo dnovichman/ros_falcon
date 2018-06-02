@@ -26,6 +26,7 @@
 #include <tf/transform_broadcaster.h>
 
 #include <eigen3/Eigen/Dense>
+#include <std_msgs/Bool.h>
 
 
 using namespace libnifalcon;
@@ -33,11 +34,13 @@ using namespace std;
 using namespace StamperKinematicImpl;
 FalconDevice m_falconDevice;
 
-ros::Publisher joy_pub, setpoints_pub, rc_overide_pub;
+ros::Publisher joy_pub, setpoints_pub, rc_overide_pub, joy_cam_pub;
 ros::Subscriber setpoints_sub, odom_sub, mavros_state_sub;
 
 nav_msgs::Odometry vehicle_odom;
 tf::Matrix3x3 Rotation_R;
+
+std::array<bool,3> button;
 
 mavros_msgs::PositionTarget des_traj_mavros;
 float vehicle_current_heading;
@@ -55,6 +58,7 @@ float KdGainX, KdGainY, KdGainZ;
 float KiGainX, KiGainY, KiGainZ;
 float sat_error_x, sat_error_y, sat_error_z;
 Eigen::Vector3f sum_errors;
+float force_max;
 
 Eigen::Vector3f current_pos, prev_pos, vel_filt;
 float filt_b;
@@ -112,6 +116,7 @@ void loadParameters(const ros::NodeHandle& n)
     n.getParam("SatErrorY", sat_error_y);
     n.getParam("SatErrorZ", sat_error_z); 
     n.getParam("VelFilterB", filt_b);
+    n.getParam("ForceMax", force_max);
 }
 
 bool init_falcon(int NoFalcon) 
@@ -137,6 +142,11 @@ bool init_falcon(int NoFalcon)
     scale_x = (vel_limits(0) - (-vel_limits(0)))/(pos_lims(0,1) - pos_lims(0,0));
     scale_y = (vel_limits(1) - (-vel_limits(1)))/(pos_lims(1,1) - pos_lims(1,0));
     scale_z = (vel_limits(2) - (-vel_limits(2)))/(pos_lims(2,1) - pos_lims(2,0));
+
+    scale_x = vel_limits(0)/(pos_lims(0,1) - pos_lims(0,0));
+    scale_y = vel_limits(1)/(pos_lims(1,1) - pos_lims(1,0));
+    scale_z = vel_limits(2)/(pos_lims(2,1) - pos_lims(2,0));
+    
     
     cout << "Setting up LibUSB" << endl;
     m_falconDevice.setFalconFirmware<FalconFirmwareNovintSDK>(); //Set Firmware
@@ -270,11 +280,9 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr& msg)
 	//pos2 is x pos0 is y pos1 is z
 
     // Please check the offsets
-	newHome[idx] = (vel_body.getX() - (-vel_limits(0)))/(vel_limits(0) - (-vel_limits(0)))*(pos_lims(0,1) - pos_lims(0,0)) + pos_lims(0,0);// + offsets(0)*0 + (pos_lims(0,1) + pos_lims(0,0))/2*0;
-	newHome[idy] = (vel_body.getY() - (-vel_limits(1)))/(vel_limits(1) - (-vel_limits(1)))*(pos_lims(1,1) - pos_lims(1,0)) + pos_lims(1,0);// + offsets(1)*0;
-	newHome[idz] = (vel_body.getZ() - (-vel_limits(2)))/(vel_limits(2) - (-vel_limits(2)))*(pos_lims(2,1) - pos_lims(2,0)) + pos_lims(2,0);// + offsets(2)*0;
-
-    //ROS_INFO("Home is %f %f %f",newHome[idx]*100, newHome[idy]*100, newHome[idz]*100);
+	newHome[idx] = (vel_body.getX() - (-vel_limits(0)))/(vel_limits(0) - (-vel_limits(0)))*(pos_lims(0,1) - pos_lims(0,0)) + pos_lims(0,0);
+	newHome[idy] = (vel_body.getY() - (-vel_limits(1)))/(vel_limits(1) - (-vel_limits(1)))*(pos_lims(1,1) - pos_lims(1,0)) + pos_lims(1,0);
+	newHome[idz] = (vel_body.getZ() - (-vel_limits(2)))/(vel_limits(2) - (-vel_limits(2)))*(pos_lims(2,1) - pos_lims(2,0)) + pos_lims(2,0);
 }
 
 void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg)
@@ -289,7 +297,7 @@ void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg)
 	// this should actually be pos
 	des_pos = msg->position;
 	
-    tf::Vector3 des_final_vel_b((Pos[idx] - offsets(0))*scale_x - 2.952225*0, (Pos[idy] - offsets(1))*scale_y, (Pos[idz] - offsets(2))*scale_z);
+    tf::Vector3 des_final_vel_b((Pos[idx]- (pos_lims(0,1) + pos_lims(0,0))/2.0f)*scale_x, Pos[idy]*scale_y, (Pos[idz])*scale_z);
 	tf::Vector3 des_final_vel_i = Rotation_R*des_final_vel_b;
 	
     des_traj_mavros.position.x = msg->position.x;
@@ -299,18 +307,17 @@ void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg)
 	des_traj_mavros.velocity.x = des_final_vel_i.getX();
 	des_traj_mavros.velocity.y = des_final_vel_i.getY();
 	des_traj_mavros.velocity.z = des_final_vel_i.getZ();
-    float des_yawrate = 0.0f;
-    if (yaw_rate_int == 8)
-        des_yawrate = -0.1;
-    else if (yaw_rate_int == 0)
-        des_yawrate = 0.1;
-	des_traj_mavros.yaw = vehicle_current_heading + des_yawrate*5;
+    float des_yawrate = yaw_rate_int*0.5f;
+
+	des_traj_mavros.yaw = vehicle_current_heading + des_yawrate*10;
 
     des_traj_mavros.yaw_rate = msg->yaw_rate + des_yawrate;
 
     des_traj_mavros.acceleration_or_force.x = 0.0f;
     des_traj_mavros.acceleration_or_force.y = 0.0f;
     des_traj_mavros.acceleration_or_force.z = 0.0f;
+
+    yaw_rate_int = 0.0f;
 	
     // only publish if vehicle is in position control mode
     std::string posctrl_string = "POSCTL";
@@ -321,9 +328,11 @@ void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg)
         rc_in = convertToRc(curp);
         rc_in.channels[4] = rc_in.channels[5] = rc_in.channels[6] = rc_in.channels[7] = 65535;
         //rc_overide_pub.publish(rc_in);
-
-	   setpoints_pub.publish(des_traj_mavros);
-       ROS_INFO("Pos cont veld %f %f %f %d",  des_final_vel_b.getX(),  des_final_vel_b.getY(),  des_final_vel_b.getZ(), yaw_rate_int);
+        bool cam_b;
+        cam_b = button[1];
+        joy_cam_pub.publish(cam_b);
+        setpoints_pub.publish(des_traj_mavros);
+        ROS_INFO("Pos cont veld %f %f %f %d",  des_final_vel_b.getX(),  des_final_vel_b.getY(),  des_final_vel_b.getZ(), yaw_rate_int);
     }
 }
 
@@ -352,7 +361,9 @@ int main(int argc, char* argv[])
     setpoints_sub = node.subscribe("setpoint_sub", 3, setpointMavrosCallback);
     setpoints_pub = node.advertise<mavros_msgs::PositionTarget>("setpoint_pub", 10);
     mavros_state_sub = node.subscribe("/mavros/state", 3, mavrosStateCallback);
+
     rc_overide_pub = node.advertise<mavros_msgs::OverrideRCIn>("/mavros/rc/override", 10);
+    joy_cam_pub = node.advertise<std_msgs::Bool>("joy_button", 10);
 
     param_listener = node.serviceClient<mavros_msgs::ParamGet>("/mavros/param/get");
 
@@ -366,7 +377,7 @@ int main(int argc, char* argv[])
 
         //Start ROS Publisher
         ros::Publisher pub = node.advertise<sensor_msgs::Joy>("/falcon/joystick",10);
-        ros::Rate loop_rate(1000);
+        ros::Rate loop_rate(2000);
         // Eric's stuff
         std::array<double,3> errors, p1error, x_k, zk, zpk;
         errors[0] = errors[1] = errors[2] = 0;
@@ -391,8 +402,7 @@ float Ts = 0.001;
             errors.setZero();
             
             int buttons;
-            std::array<bool,3> button;
-
+            
             if(m_falconDevice.runIOLoop())
             {
                 if(m_falconDevice.getFalconGrip()->getDigitalInputs() & libnifalcon::FalconGripFourButton::BUTTON_1)
@@ -450,9 +460,9 @@ float Ts = 0.001;
                 cur_time = ros::Time::now().toSec();
                 double dt = cur_time - prev_time;                
                 
-                errors(0) = Pos[0] - newHome[0];
-                errors(1) = Pos[1] - newHome[1];
-                errors(2) = Pos[2] - newHome[2];
+                errors(0) = Pos[0]- (pos_lims(2,1) + pos_lims(2,0))/2.0f;
+                errors(1) = Pos[1]- (pos_lims(1,1) + pos_lims(1,0))/2.0f;
+                errors(2) = Pos[2] - (pos_lims(0,1) + pos_lims(0,0))/2.0f;
 
                 sum_errors += errors;
                 bound_errors();
@@ -460,7 +470,22 @@ float Ts = 0.001;
 
                 forces[0] = - KpGainX*errors(0) - KdGainX*vel_filt(0) - KiGainX*sum_errors(0);
                 forces[1] = - KpGainY*errors(1) - KdGainY*vel_filt(1) - KiGainY*sum_errors(1);
-                forces[2] = - KpGainZ*errors(2) - KdGainZ*vel_filt(2) - KiGainZ*sum_errors(2) + 80/100*0;
+                forces[2] = - KpGainZ*errors(2) - KdGainZ*vel_filt(2) - KiGainZ*sum_errors(2);
+
+                if (forces[0] > force_max)
+                    forces[0] = force_max;
+                if (forces[0] < -force_max)
+                    forces[0] = -force_max;
+
+                if (forces[1] > force_max)
+                    forces[1] = force_max;
+                if (forces[1] < -force_max)
+                    forces[1] = -force_max;
+
+                if (forces[2] > force_max)
+                    forces[2] = force_max;
+                if (forces[2] < -force_max)
+                    forces[2] = -force_max;
 
                /* // Eric's controller
                 std::array<double,3> ppos;
@@ -505,7 +530,6 @@ forces[2] = scale*1.5*KP*(errors[2]+1.0*KI*x_k[2]+KD*zk[2])*20*1.5;
         */
 
                 m_falconDevice.setForce(forces);
-
                 if(debug)
                 {
                     cout << "Position= " << Pos[0]*100 <<" " << Pos[1]*100 << " " << Pos[2]*100 <<  endl; 
@@ -585,6 +609,8 @@ void initiaizeValues(void)
 
     velocity_xy_max = 3.0f;
     velocity_z_max = 3.0f;
+
+    force_max = 3.0f;
 }
 
 void readRcParams(void)
