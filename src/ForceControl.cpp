@@ -46,7 +46,7 @@ mavros_msgs::PositionTarget des_traj_mavros;
 float vehicle_current_heading;
 geometry_msgs::Point des_pos, des_vel, des_acc;
 int idx, idy, idz;
-float scale_x, scale_y, scale_z;
+float scale_x, scale_y, scale_z, yaw_scale;
 
 std::array<double, 3> Pos;
 std::array<double, 3> newHome, prevHome;
@@ -92,7 +92,6 @@ void loadParameters(const ros::NodeHandle& n);
 void bound_errors(void);
 void velocity_filter(std::array<double, 3> prev_pos, double dt);
 void initiaizeValues(void);
-double lowPass_filter2(double  xk, double  xk1, double  a );
 	
 void loadParameters(const ros::NodeHandle& n)
 {
@@ -117,6 +116,7 @@ void loadParameters(const ros::NodeHandle& n)
     n.getParam("SatErrorZ", sat_error_z); 
     n.getParam("VelFilterB", filt_b);
     n.getParam("ForceMax", force_max);
+    n.getParam("YawScale", yaw_scale);
 }
 
 bool init_falcon(int NoFalcon) 
@@ -307,9 +307,9 @@ void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg)
 	des_traj_mavros.velocity.x = des_final_vel_i.getX();
 	des_traj_mavros.velocity.y = des_final_vel_i.getY();
 	des_traj_mavros.velocity.z = des_final_vel_i.getZ();
-    float des_yawrate = yaw_rate_int*0.5f;
+    float des_yawrate = -yaw_rate_int*yaw_scale;
 
-	des_traj_mavros.yaw = vehicle_current_heading + des_yawrate*10;
+	des_traj_mavros.yaw = vehicle_current_heading + des_yawrate;
 
     des_traj_mavros.yaw_rate = msg->yaw_rate + des_yawrate;
 
@@ -327,12 +327,16 @@ void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg)
         Eigen::Vector3f curp(des_final_vel_b.getX(), des_final_vel_b.getY(), des_final_vel_b.getZ());
         rc_in = convertToRc(curp);
         rc_in.channels[4] = rc_in.channels[5] = rc_in.channels[6] = rc_in.channels[7] = 65535;
+
+        // TODO for future PX4 versions that have software enabled rc override
         //rc_overide_pub.publish(rc_in);
         bool cam_b;
         cam_b = button[1];
         joy_cam_pub.publish(cam_b);
         setpoints_pub.publish(des_traj_mavros);
-        ROS_INFO("Pos cont veld %f %f %f %d",  des_final_vel_b.getX(),  des_final_vel_b.getY(),  des_final_vel_b.getZ(), yaw_rate_int);
+        #if 0
+            ROS_INFO("Pos cont veld %f %f %f %d",  des_final_vel_b.getX(),  des_final_vel_b.getY(),  des_final_vel_b.getZ(), yaw_rate_int);
+        #endif
     }
 }
 
@@ -356,7 +360,7 @@ int main(int argc, char* argv[])
     node.param<bool>("falcon_clutch", clutchPressed, true);
     node.param<bool>("falcon_coag", coagPressed, true);
 
-    debug = true;
+    //debug = true;
     odom_sub = node.subscribe<nav_msgs::Odometry>("odom", 10, odomCallback);
     setpoints_sub = node.subscribe("setpoint_sub", 3, setpointMavrosCallback);
     setpoints_pub = node.advertise<mavros_msgs::PositionTarget>("setpoint_pub", 10);
@@ -377,17 +381,7 @@ int main(int argc, char* argv[])
 
         //Start ROS Publisher
         ros::Publisher pub = node.advertise<sensor_msgs::Joy>("/falcon/joystick",10);
-        ros::Rate loop_rate(2000);
-        // Eric's stuff
-        std::array<double,3> errors, p1error, x_k, zk, zpk;
-        errors[0] = errors[1] = errors[2] = 0;
-        float KP = 21;
-    float KI = 0.45;
-    float KL = 0.83;
-    float KD = 0.028;
-    float Rat = 0.5;
-
-float Ts = 0.001;
+        ros::Rate loop_rate(2000);    
 
         while(node.ok())
         {
@@ -460,8 +454,8 @@ float Ts = 0.001;
                 cur_time = ros::Time::now().toSec();
                 double dt = cur_time - prev_time;                
                 
-                errors(0) = Pos[0]- (pos_lims(2,1) + pos_lims(2,0))/2.0f;
-                errors(1) = Pos[1]- (pos_lims(1,1) + pos_lims(1,0))/2.0f;
+                errors(0) = Pos[0]- (pos_lims(2,1) + pos_lims(2,0))/2.0f + 0/100;
+                errors(1) = Pos[1]- (pos_lims(1,1) + pos_lims(1,0))/2.0f -4/100;
                 errors(2) = Pos[2] - (pos_lims(0,1) + pos_lims(0,0))/2.0f;
 
                 sum_errors += errors;
@@ -486,48 +480,6 @@ float Ts = 0.001;
                     forces[2] = force_max;
                 if (forces[2] < -force_max)
                     forces[2] = -force_max;
-
-               /* // Eric's controller
-                std::array<double,3> ppos;
-                ppos[0] = Pos[0];
-                ppos[1] = Pos[1];
-                ppos[2] = (Pos[2]-0.12);
-                static double vel_filter[3] = {0, 0, 0};
-    static int i = 0;
-// low pass filter the velocity for servoing the position
-
-    for (i=0; i < 3; i++)
-    {
-        vel_filter[i] = lowPass_filter2(vel_filter[i], ppos[i], 0 ); // full pass when last parameter is 0;
-}
-
-                p1error[0] = errors[0];
-    p1error[1] = errors[1];
-    p1error[2] = errors[2];
-    
-    float scale = 0.55;   
-
-    errors[0] = (vel_filter[0]/10-ppos[0]);//x in right direction
-    errors[1] = (vel_filter[1]/10-ppos[1]);//y in front
-    errors[2] = (vel_filter[2]/10-ppos[2]);
-    double zpk[3];
-    zpk[0] = (errors[0]-p1error[0])/Ts;
-    zpk[1] = (errors[1]-p1error[1])/Ts;
-    zpk[2] = (errors[2]-p1error[2])/Ts;
-
-    zk[0] = Rat*zk[0]+(1-Rat)*zpk[0];
-    zk[1] = Rat*zk[1]+(1-Rat)*zpk[1];
-    zk[2] = Rat*zk[2]+(1-Rat)*zpk[2];
-
-    x_k[0] = KL*tanh(x_k[0]+errors[0]);
-    x_k[1] = KL*tanh(x_k[1]+errors[1]);
-    x_k[2] = KL*tanh(x_k[2]+errors[2]);
-
-    forces[0] = scale*1.5*KP*(errors[0]+1.0* KI*x_k[0]+KD*zk[0])*20;//pid force applied to falcon to servo the position
-    forces[1] = scale*1.5*KP*(errors[1]+1.0 *KI*x_k[1]+1.0*KD*zk[1])*20+0.85;
-forces[2] = scale*1.5*KP*(errors[2]+1.0*KI*x_k[2]+KD*zk[2])*20*1.5;
-
-        */
 
                 m_falconDevice.setForce(forces);
                 if(debug)
@@ -665,12 +617,4 @@ mavros_msgs::OverrideRCIn convertToRc(Eigen::Vector3f curp)
     rc.channels[1] = (curp(0) - (-vel_limits(0)))/(vel_limits(0) - (-vel_limits(0)))*(max_rc(1) - min_rc(1)) + min_rc(1);
     rc.channels[2] = (curp(2) - (-vel_limits(2)))/(vel_limits(2) - (-vel_limits(2)))*(max_rc(2) - min_rc(2)) + min_rc(2);
     return rc;
-}
-
-double lowPass_filter2(double  xk, double  xk1, double  a )
-{
-    double  yk;
-
-    yk = a * xk + (1 - a) * xk1;
-    return(yk);
 }

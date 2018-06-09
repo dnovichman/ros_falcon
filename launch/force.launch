@@ -5,8 +5,8 @@
           required="true"
 	  clear_params="true"
           output="screen">
-      <param name="velocity_xy_max" value="3" />
-      <param name="velocity_z_max" value="3" />
+      <param name="velocity_xy_max" value="5" />
+      <param name="velocity_z_max" value="5" />
       <param name="KpGainX" value="200" />
       <param name="KpGainY" value="300" />
       <param name="KpGainZ" value="120" />
@@ -21,6 +21,7 @@
       <param name="SatErrorZ" value="20" />
       <param name="VelFilterB" value="0.00005" />
       <param name="ForceMax" value="1.3" />
+      <param name="YawScale" value="0.5" />
 	  <remap from="~odom" to="/iris1/odom"/>
 	  <remap from="~setpoint_sub" to="/mavros/setpoint_raw/target_local"/> 
 	  <remap from="~setpoint_pub" to="/mavros/setpoint_raw/local_joy"/>
