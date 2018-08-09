@@ -15,17 +15,10 @@
 #include "falcon/util/FalconFirmwareBinaryNvent.h"
 #include "falcon/grip/FalconGripFourButton.h"
 
-#include <mavros_msgs/PositionTarget.h>
-#include <mavros_msgs/State.h>
-#include <mavros_msgs/OverrideRCIn.h>
-#include <mavros_msgs/ParamGet.h>
-#include <nav_msgs/Odometry.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <tf/transform_datatypes.h>
-#include <tf/transform_broadcaster.h>
-
 #include <eigen3/Eigen/Dense>
+
 #include <std_msgs/Bool.h>
 
 
@@ -37,12 +30,9 @@ FalconDevice m_falconDevice;
 ros::Publisher joy_pub, setpoints_pub, rc_overide_pub, joy_cam_pub;
 ros::Subscriber setpoints_sub, odom_sub, mavros_state_sub;
 
-nav_msgs::Odometry vehicle_odom;
-tf::Matrix3x3 Rotation_R;
 
 std::array<bool,3> button;
 
-mavros_msgs::PositionTarget des_traj_mavros;
 float vehicle_current_heading;
 geometry_msgs::Point des_pos, des_vel, des_acc;
 int idx, idy, idz;
@@ -75,19 +65,10 @@ Eigen::Vector3f min_rc;
 Eigen::Vector3f max_rc;
 Eigen::Vector3f yaw_rc;
 
-
-mavros_msgs::State mavros_state;
-ros::ServiceClient param_listener;
-
-mavros_msgs::ParamGet param_get_srv;
-mavros_msgs::OverrideRCIn rc_in;
-
 void setpointCallback(const geometry_msgs::TwistStamped::ConstPtr& msg);
-void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg);
-void odomCallback(const nav_msgs::Odometry::ConstPtr& msg);
-void mavrosStateCallback(const mavros_msgs::State::ConstPtr& msg);
-void readRcParams(void);
-mavros_msgs::OverrideRCIn convertToRc(Eigen::Vector3f curp);
+
+
+
 void loadParameters(const ros::NodeHandle& n);
 void bound_errors(void);
 void velocity_filter(std::array<double, 3> prev_pos, double dt);
@@ -121,8 +102,6 @@ void loadParameters(const ros::NodeHandle& n)
 
 bool init_falcon(int NoFalcon) 
 {  
-    readRcParams();
-    
     idx = 2;
     idy = 0;
     idz = 1;    
@@ -249,102 +228,6 @@ bool init_falcon(int NoFalcon)
     return true;
 }
 
-void odomCallback(const nav_msgs::Odometry::ConstPtr& msg)
-{
-    param_get_srv.request.param_id = "RC1_MAX";
-    param_listener.call(param_get_srv);
-    int rc1max = param_get_srv.response.value.real;
-    param_get_srv.request.param_id = "RC1_MIN";
-    param_listener.call(param_get_srv);
-    int rc1min = param_get_srv.response.value.real;
-
-    param_get_srv.request.param_id = "RC1_TRIM";
-    param_listener.call(param_get_srv);
-    int rc1trim = param_get_srv.response.value.real;
-
-
-	vehicle_odom.header = msg->header;
-	vehicle_odom.pose = msg->pose;
-    vehicle_odom.twist = msg->twist;
-
-	double roll, pitch, yaw;
-	tf::Matrix3x3 R_matrxix;
-	tf::Quaternion q(vehicle_odom.pose.pose.orientation.x, vehicle_odom.pose.pose.orientation.y, vehicle_odom.pose.pose.orientation.z, vehicle_odom.pose.pose.orientation.w);
-	R_matrxix.setRotation(q);
-	R_matrxix.getEulerYPR(yaw, pitch, roll);
-	Rotation_R.setRotation(q);
-	vehicle_current_heading = yaw;
-	tf::Vector3 vel_int(vehicle_odom.twist.twist.linear.x, vehicle_odom.twist.twist.linear.y, vehicle_odom.twist.twist.linear.z);
-	tf::Vector3 vel_body;
-	vel_body = Rotation_R.transpose()*vel_int;
-	//pos2 is x pos0 is y pos1 is z
-
-    // Please check the offsets
-	newHome[idx] = (vel_body.getX() - (-vel_limits(0)))/(vel_limits(0) - (-vel_limits(0)))*(pos_lims(0,1) - pos_lims(0,0)) + pos_lims(0,0);
-	newHome[idy] = (vel_body.getY() - (-vel_limits(1)))/(vel_limits(1) - (-vel_limits(1)))*(pos_lims(1,1) - pos_lims(1,0)) + pos_lims(1,0);
-	newHome[idz] = (vel_body.getZ() - (-vel_limits(2)))/(vel_limits(2) - (-vel_limits(2)))*(pos_lims(2,1) - pos_lims(2,0)) + pos_lims(2,0);
-}
-
-void setpointMavrosCallback(const mavros_msgs::PositionTarget::ConstPtr& msg)
-{
-    tf::Vector3 final_vel_body, final_pose_body;
-	tf::Vector3 vel_int(msg->velocity.x, msg->velocity.y, msg->velocity.z);
-	tf::Vector3 pose_int(msg->position.x, msg->position.y, msg->position.z);
-
-	final_pose_body = Rotation_R.transpose()*pose_int;
-	final_vel_body = Rotation_R.transpose()*vel_int;	
-	
-	// this should actually be pos
-	des_pos = msg->position;
-	
-    tf::Vector3 des_final_vel_b((Pos[idx]- (pos_lims(0,1) + pos_lims(0,0))/2.0f)*scale_x, Pos[idy]*scale_y, (Pos[idz])*scale_z);
-	tf::Vector3 des_final_vel_i = Rotation_R*des_final_vel_b;
-	
-    des_traj_mavros.position.x = msg->position.x;
-    des_traj_mavros.position.y = msg->position.y;
-    des_traj_mavros.position.z = msg->position.z;
-
-	des_traj_mavros.velocity.x = des_final_vel_i.getX();
-	des_traj_mavros.velocity.y = des_final_vel_i.getY();
-	des_traj_mavros.velocity.z = des_final_vel_i.getZ();
-    float des_yawrate = -yaw_rate_int*yaw_scale;
-
-	des_traj_mavros.yaw = vehicle_current_heading + des_yawrate;
-
-    des_traj_mavros.yaw_rate = msg->yaw_rate + des_yawrate;
-
-    des_traj_mavros.acceleration_or_force.x = 0.0f;
-    des_traj_mavros.acceleration_or_force.y = 0.0f;
-    des_traj_mavros.acceleration_or_force.z = 0.0f;
-
-    yaw_rate_int = 0.0f;
-	
-    // only publish if vehicle is in position control mode
-    std::string posctrl_string = "POSCTL";
-    if (posctrl_string.compare(mavros_state.mode) == 0)
-    {
-        
-        Eigen::Vector3f curp(des_final_vel_b.getX(), des_final_vel_b.getY(), des_final_vel_b.getZ());
-        rc_in = convertToRc(curp);
-        rc_in.channels[4] = rc_in.channels[5] = rc_in.channels[6] = rc_in.channels[7] = 65535;
-
-        // TODO for future PX4 versions that have software enabled rc override
-        //rc_overide_pub.publish(rc_in);
-        bool cam_b;
-        cam_b = button[1];
-        joy_cam_pub.publish(cam_b);
-        setpoints_pub.publish(des_traj_mavros);
-        #if 0
-            ROS_INFO("Pos cont veld %f %f %f %d",  des_final_vel_b.getX(),  des_final_vel_b.getY(),  des_final_vel_b.getZ(), yaw_rate_int);
-        #endif
-    }
-}
-
-void mavrosStateCallback(const mavros_msgs::State::ConstPtr& msg)
-{
-    mavros_state.header = msg->header;
-    mavros_state.mode = msg->mode;
-}
 
 int main(int argc, char* argv[])
 {
@@ -361,15 +244,10 @@ int main(int argc, char* argv[])
     node.param<bool>("falcon_coag", coagPressed, true);
 
     //debug = true;
-    odom_sub = node.subscribe<nav_msgs::Odometry>("odom", 10, odomCallback);
-    setpoints_sub = node.subscribe("setpoint_sub", 3, setpointMavrosCallback);
-    setpoints_pub = node.advertise<mavros_msgs::PositionTarget>("setpoint_pub", 10);
-    mavros_state_sub = node.subscribe("/mavros/state", 3, mavrosStateCallback);
 
-    rc_overide_pub = node.advertise<mavros_msgs::OverrideRCIn>("/mavros/rc/override", 10);
+
     joy_cam_pub = node.advertise<std_msgs::Bool>("joy_button", 10);
 
-    param_listener = node.serviceClient<mavros_msgs::ParamGet>("/mavros/param/get");
 
     loadParameters(node);
 
@@ -550,71 +428,9 @@ void initiaizeValues(void)
     vel_filt.setZero();
     filt_b = 1.0f;
 
-    rc_in.channels[0] = rc_in.channels[1] = rc_in.channels[3] = 1500; 
-    rc_in.channels[2] = 1000;
-    rc_in.channels[5] = rc_in.channels[6] = rc_in.channels[7] = 65535;
-    rc_in.channels[4] = 1500;
-    rc_trims.setZero();
-
-    Rotation_R.setIdentity();
-    offsets.setZero();
 
     velocity_xy_max = 3.0f;
     velocity_z_max = 3.0f;
 
     force_max = 3.0f;
-}
-
-void readRcParams(void)
-{
-    // Get RC param values
-    param_get_srv.request.param_id = "RC1_TRIM";
-    param_listener.call(param_get_srv); 
-    rc_trims(1) = (float)param_listener.call(param_get_srv); //Roll is y
-    param_get_srv.request.param_id = "RC2_TRIM";
-    param_listener.call(param_get_srv); 
-    rc_trims(0) = (float)param_listener.call(param_get_srv); //Roll is x
-    param_get_srv.request.param_id = "RC3_TRIM";
-    param_listener.call(param_get_srv); 
-    rc_trims(2) = (float)param_listener.call(param_get_srv); //Roll is z
-
-    param_get_srv.request.param_id = "RC1_MIN";
-    param_listener.call(param_get_srv); 
-    min_rc(1) = (float)param_listener.call(param_get_srv); //Roll is y
-    param_get_srv.request.param_id = "RC2_MIN";
-    param_listener.call(param_get_srv); 
-    min_rc(0) = (float)param_listener.call(param_get_srv); //Roll is x
-    param_get_srv.request.param_id = "RC3_MIN";
-    param_listener.call(param_get_srv); 
-    min_rc(2) = (float)param_listener.call(param_get_srv); //Roll is z
-
-    param_get_srv.request.param_id = "RC1_MAX";
-    param_listener.call(param_get_srv); 
-    max_rc(1) = (float)param_listener.call(param_get_srv); //Roll is y
-    param_get_srv.request.param_id = "RC2_MAX";
-    param_listener.call(param_get_srv); 
-    max_rc(0) = (float)param_listener.call(param_get_srv); //Roll is x
-    param_get_srv.request.param_id = "RC3_MAX";
-    param_listener.call(param_get_srv); 
-    max_rc(2) = (float)param_listener.call(param_get_srv); //Roll is z
-
-
-    param_get_srv.request.param_id = "RC4_TRIM";
-    param_listener.call(param_get_srv); 
-    yaw_rc(1) = (float)param_listener.call(param_get_srv);
-    param_get_srv.request.param_id = "RC4_MIN";
-    param_listener.call(param_get_srv); 
-    yaw_rc(0) = (float)param_listener.call(param_get_srv);
-    param_get_srv.request.param_id = "RC4_MAX";
-    param_listener.call(param_get_srv); 
-    yaw_rc(2) = (float)param_listener.call(param_get_srv);  
-}
-
-mavros_msgs::OverrideRCIn convertToRc(Eigen::Vector3f curp)
-{
-    mavros_msgs::OverrideRCIn rc;
-    rc.channels[0] = (curp(1) - (-vel_limits(1)))/(vel_limits(1) - (-vel_limits(1)))*(max_rc(0) - min_rc(0)) + min_rc(0);
-    rc.channels[1] = (curp(0) - (-vel_limits(0)))/(vel_limits(0) - (-vel_limits(0)))*(max_rc(1) - min_rc(1)) + min_rc(1);
-    rc.channels[2] = (curp(2) - (-vel_limits(2)))/(vel_limits(2) - (-vel_limits(2)))*(max_rc(2) - min_rc(2)) + min_rc(2);
-    return rc;
 }

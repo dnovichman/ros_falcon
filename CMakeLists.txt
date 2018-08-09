@@ -12,8 +12,6 @@ find_package(catkin REQUIRED COMPONENTS
  roscpp
  joy
  message_generation
- tf
- mavros
 )
 
 find_package(Boost REQUIRED)
@@ -32,22 +30,13 @@ generate_messages(
  std_msgs
 )
 
-catkin_package(
-DEPENDS tf mavros 
-)
+#catkin_package(
+#DEPENDS tf mavros 
+#)
 
 include_directories(
   ${catkin_INCLUDE_DIRS}
 )
-
-#set the default path for built executables to the "bin" directory
-#set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
-#set the default path for built libraries to the "lib" directory
-#set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
-
-
-#uncomment if you have defined services
-#rosbuild_gensrv()
 
 #common commands for building c++ executables and libraries
 #rosbuild_add_library(${PROJECT_NAME} src/example.cpp)

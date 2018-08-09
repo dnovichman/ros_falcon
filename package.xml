@@ -15,9 +15,6 @@
   <build_depend>joy</build_depend>
   <build_depend>geometry_msgs</build_depend>
   <build_depend>message_generation</build_depend>
-  <build_depend>mavros</build_depend>
-  <build_depend>nav_msgs</build_depend>
-  <build_depend>tf</build_depend>
 
   <run_depend>roscpp</run_depend>
   <run_depend>rospy</run_depend>
@@ -27,9 +24,6 @@
   <run_depend>libusb-1.0</run_depend>
   <run_depend>libnifalcon</run_depend>
   <run_depend>message_runtime</run_depend>
-  <run_depend>mavros</run_depend>
-  <run_depend>nav_msgs</run_depend>
-  <run_depend>tf</run_depend>
   <export>
     <!-- You can specify that this package is a metapackage here: -->
     <!-- <metapackage/> -->
